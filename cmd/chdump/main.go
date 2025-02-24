@@ -5,18 +5,32 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	_ "github.com/ClickHouse/clickhouse-go/v2"
 )
 
+func query(db *sql.DB, query string) string {
+	var result string
+
+	rows, err := db.Query(query)
+	if err != nil {
+		log.Fatalf("Query '%s' failed: %v", query, err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		if err := rows.Scan(&result); err != nil {
+			log.Fatalf("Query '%s' result scan failed: %v", query, err)
+		}
+	} else {
+		log.Fatalf("Query '%s' yielded no results.", query)
+	}
+
+	return result
+}
+
 func main() {
 	// Replace these with your actual database credentials and connection details
-	const (
-		address  = "tcp://localhost:9000"
-		username = "default"
-		password = ""
-		database = "default"
-	)
 
 	clickhouseDSN := os.Args[1]
 
@@ -32,6 +46,11 @@ func main() {
 	}
 	defer db.Close()
 
+	// Query the current database name
+	dbName := query(db, "SELECT currentDatabase()")
+	dbCreate := query(db, fmt.Sprintf("SHOW CREATE DATABASE %s", dbName))
+	fmt.Printf("%s\n;\n----------------------------------------\n", dbCreate)
+
 	// Query to retrieve table names in the specified database
 	tableNamesQuery := "SHOW TABLES"
 	rows, err := db.Query(tableNamesQuery)
@@ -46,20 +65,10 @@ func main() {
 			log.Fatalf("Failed to scan row: %v", err)
 		}
 		// Query to retrieve the DDL of each table
-		showCreateTableQuery := fmt.Sprintf("SHOW CREATE TABLE `%s`", tableName)
-		tableDDL, err := db.Query(showCreateTableQuery)
-		if err != nil {
-			log.Fatalf("Failed to get DDL for table %s: %v", tableName, err)
-		}
-		defer tableDDL.Close()
-
-		if tableDDL.Next() {
-			var ddl string
-			if err := tableDDL.Scan(&ddl); err != nil {
-				log.Fatalf("Failed to scan DDL of table %s: %v", tableName, err)
-			}
-			fmt.Printf("%s\n;\n----------------------------------------\n", ddl)
-		}
+		tableCreate := query(db, fmt.Sprintf("SHOW CREATE TABLE `%s`", tableName))
+		tableUuid := query(db, fmt.Sprintf("SELECT uuid FROM system.tables WHERE database='%s' AND name='%s'", dbName, tableName))
+		idx := strings.Index(tableCreate, "(")
+		fmt.Printf("%s\n;\n----------------------------------------\n", fmt.Sprintf("%s UUID '%s'\n%s", tableCreate[:idx], tableUuid, tableCreate[idx:]))
 	}
 
 	if err := rows.Err(); err != nil {
